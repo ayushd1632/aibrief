@@ -43,6 +43,7 @@ def run_synthesis_agent(
         sources_text += (
             f"\n[INDUSTRY NEWS]\n"
             f"Title: {n['title']}\n"
+            f"URL: {n.get('url', '')}\n"
             f"Content: {n['content']}\n"
         )
 
@@ -69,7 +70,8 @@ Use exactly this structure:
       "category": "Research",
       "difficulty": "Technical",
       "source_title": "copy the exact original title from the sources",
-      "source_type": "arXiv",
+      "source_url": "copy the exact URL or Link value from the sources above — must start with http, copy it verbatim, do not invent or shorten it",
+      "source_type": "arXiv or Hacker News or News",
       "estimated_reading_time": 2
     }}
   ]
