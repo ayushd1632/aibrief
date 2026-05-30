@@ -10,8 +10,9 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # ────────────────────────────────────────────
 # AGENT 1: Synthesis Agent
-# Role: Read all raw sources, pick the best 5, explain in plain English.
-# Returns: A list of 5 structured dicts (one per item).
+# Reads all harvested sources, selects top 5,
+# explains each in plain English with business framing.
+# Returns a list of structured dicts (one per item).
 # ────────────────────────────────────────────
 def run_synthesis_agent(
     papers: list,
@@ -20,7 +21,7 @@ def run_synthesis_agent(
     focus_area: str
 ) -> list:
 
-    # Build one big text block containing all source material
+    # Build one block of text containing all source material
     sources_text = ""
 
     for p in papers[:8]:
@@ -133,7 +134,7 @@ Tone: Smart, engaging, like a trusted friend in tech explaining what matters thi
 
 Format the newsletter EXACTLY as follows (keep all the dashes and formatting):
 
-Subject: [Compelling subject line referencing the most interesting item this week — under 60 characters]
+Subject: [6-9 word subject line capturing the OVERALL theme connecting all 5 items this week — NOT just the first story. Think: what trend or shift do these 5 items collectively represent?]
 
 Hi {org_name} community,
 

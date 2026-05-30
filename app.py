@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 from datetime import datetime
 import time
 import json
@@ -166,6 +165,8 @@ hr { border-color: #1E1E2E !important; }
 
 # ════════════════════════════════════════════════════════
 # HELPER: RENDER A DIGEST CARD
+# Uses st.html() to bypass Streamlit's markdown sanitiser,
+# which corrupts complex nested HTML on Streamlit Cloud.
 # ════════════════════════════════════════════════════════
 def render_digest_card(item: dict) -> None:
     """Renders a single digest item as a beautiful dark card with a clickable source link."""
@@ -209,7 +210,7 @@ def render_digest_card(item: dict) -> None:
     else:
         link_html = ""
 
-    st.markdown(f"""
+    st.html(f"""
 <div style="
     background: linear-gradient(135deg, #111120, #161628);
     border: 1px solid {cfg['border']};
@@ -275,13 +276,73 @@ def render_digest_card(item: dict) -> None:
         {link_html}
     </div>
 </div>
-""", unsafe_allow_html=True)
+""")
+
+
+# ════════════════════════════════════════════════════════
+# HELPER: ENRICH DIGEST ITEMS WITH SOURCE URLS
+# Deterministically matches each item's source_title back
+# to the original harvested sources to get the real URL.
+# Never relies on the LLM copying URLs correctly.
+# ════════════════════════════════════════════════════════
+def enrich_digest_urls(
+    digest_items: list,
+    papers: list,
+    hn_stories: list,
+    news_items: list,
+) -> list:
+
+    lookup = []
+    for p in papers:
+        if p.get("link"):
+            lookup.append((p["title"].lower().strip(), p["link"]))
+    for s in hn_stories:
+        if s.get("url"):
+            lookup.append((s["title"].lower().strip(), s["url"]))
+    for n in news_items:
+        if n.get("url"):
+            lookup.append((n["title"].lower().strip(), n["url"]))
+
+    for item in digest_items:
+        if item.get("source_url", "").strip().startswith("http"):
+            continue
+
+        query = item.get("source_title", "").lower().strip()
+        if not query or len(query) < 8:
+            continue
+
+        matched = ""
+
+        # Pass 1: exact match
+        for orig, url in lookup:
+            if query == orig:
+                matched = url
+                break
+
+        # Pass 2: substring containment (handles LLM truncation / rewording)
+        if not matched and len(query) >= 15:
+            for orig, url in lookup:
+                if query in orig or orig in query:
+                    matched = url
+                    break
+
+        # Pass 3: first-25-character prefix match
+        if not matched and len(query) >= 15:
+            for orig, url in lookup:
+                if query[:25] == orig[:25]:
+                    matched = url
+                    break
+
+        if matched:
+            item["source_url"] = matched
+
+    return digest_items
 
 
 # ════════════════════════════════════════════════════════
 # HELPER: RENDER A LINKEDIN POST CARD
-# Uses components.html so JS clipboard API actually executes.
-# The entire card (badge + text + copy button) lives in one iframe.
+# Display-only card using st.html().
+# Download button rendered separately in the tab code.
 # ════════════════════════════════════════════════════════
 def render_linkedin_card(
     post_text: str,
@@ -291,203 +352,37 @@ def render_linkedin_card(
     label: str,
     sublabel: str,
 ) -> None:
-    """
-    Renders a LinkedIn post card inside a components.html iframe.
-    This is the only reliable way to execute clipboard JS in Streamlit.
-    """
     safe_text = html_lib.escape(post_text)
-    js_text = json.dumps(post_text)   # Properly escapes quotes, newlines, special chars
 
-    # Dynamically size the iframe to fit the content
-    char_count = len(post_text)
-    newlines = post_text.count("\n")
-    est_lines = newlines + (char_count // 55)
-    height = max(300, min(620, 130 + est_lines * 23))
-
-    card_html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ background:transparent; font-family:'Inter',sans-serif; padding:2px 0 4px 0; }}
-
-.badge {{
-    background: linear-gradient(135deg, {accent_color}22, {accent_color}11);
-    border: 1px solid {accent_color}44;
-    border-radius: 12px;
-    padding: 12px 16px 10px 16px;
-    margin-bottom: 8px;
-}}
-.badge-title {{
-    color: {accent_color};
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.8px;
-    text-transform: uppercase;
-    margin-bottom: 4px;
-}}
-.badge-sub {{ color: #64748B; font-size: 12px; }}
-
-.card {{
-    background: #111120;
-    border: 1px solid {border_color};
-    border-radius: 12px;
-    padding: 18px 18px 52px 18px;
-    position: relative;
-    min-height: 120px;
-}}
-.post-text {{
-    color: #94A3B8;
-    font-size: 14px;
-    line-height: 1.85;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-}}
-.copy-btn {{
-    position: absolute;
-    bottom: 12px;
-    right: 12px;
-    background: #1A1A2E;
-    color: #64748B;
-    border: 1px solid #2D2D44;
-    border-radius: 8px;
-    padding: 7px 14px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-}}
-</style>
-</head>
-<body>
-
-<div class="badge">
-    <div class="badge-title">{label}</div>
-    <div class="badge-sub">{sublabel}</div>
+    st.html(f"""
+<div style="margin-bottom:6px;font-family:Inter,sans-serif;">
+    <div style="
+        background:linear-gradient(135deg,{accent_color}22,{accent_color}11);
+        border:1px solid {accent_color}44;
+        border-radius:12px;
+        padding:12px 16px 10px 16px;
+        margin-bottom:8px;
+    ">
+        <div style="
+            color:{accent_color};font-size:11px;font-weight:700;
+            letter-spacing:0.8px;text-transform:uppercase;margin-bottom:4px;
+        ">{label}</div>
+        <div style="color:#64748B;font-size:12px;">{sublabel}</div>
+    </div>
+    <div style="
+        background:#111120;
+        border:1px solid {border_color};
+        border-radius:12px;
+        padding:20px;
+        min-height:120px;
+    ">
+        <div style="
+            color:#94A3B8;font-size:14px;line-height:1.85;
+            white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word;
+        ">{safe_text}</div>
+    </div>
 </div>
-
-<div class="card">
-    <div class="post-text">{safe_text}</div>
-    <button class="copy-btn" id="cbtn_{card_id}"
-        onclick="(function() {{
-            var text = {js_text};
-            var btn  = document.getElementById('cbtn_{card_id}');
-
-            function onSuccess() {{
-                btn.textContent = '✅ Copied!';
-                btn.style.cssText = 'position:absolute;bottom:12px;right:12px;background:#064E3B;color:#10B981;border:1px solid #059669;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;';
-                setTimeout(function() {{
-                    btn.textContent = '📋 Copy post';
-                    btn.style.cssText = 'position:absolute;bottom:12px;right:12px;background:#1A1A2E;color:#64748B;border:1px solid #2D2D44;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:Inter,sans-serif;';
-                }}, 2200);
-            }}
-
-            function fallback() {{
-                var ta = document.createElement('textarea');
-                ta.value = text;
-                ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
-                document.body.appendChild(ta);
-                ta.focus();
-                ta.select();
-                try {{ document.execCommand('copy'); }} catch(e) {{}}
-                document.body.removeChild(ta);
-                onSuccess();
-            }}
-
-            if (navigator && navigator.clipboard && navigator.clipboard.writeText) {{
-                navigator.clipboard.writeText(text)
-                    .then(onSuccess)
-                    .catch(fallback);
-            }} else {{
-                fallback();
-            }}
-        }})()">
-        📋 Copy post
-    </button>
-</div>
-
-</body>
-</html>"""
-
-    components.html(card_html, height=height, scrolling=False)
-
-
-# ════════════════════════════════════════════════════════
-# HELPER: GENERIC COPY-TO-CLIPBOARD BUTTON
-# Used for the newsletter copy button. Same JS pattern as above.
-# ════════════════════════════════════════════════════════
-def make_copy_button(text_to_copy: str, label: str, btn_id: str) -> None:
-    """
-    Renders a standalone copy-to-clipboard button via components.html.
-    Matches the visual style of Streamlit's download button.
-    """
-    js_text = json.dumps(text_to_copy)
-
-    btn_html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ background:transparent; padding:2px 0; }}
-button {{
-    background: #13131F;
-    color: #94A3B8;
-    border: 1px solid #2D2D44;
-    border-radius: 8px;
-    padding: 8px 16px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    font-family: 'Inter', sans-serif;
-    white-space: nowrap;
-}}
-</style>
-</head>
-<body>
-<button id="mcb_{btn_id}"
-    onclick="(function() {{
-        var text = {js_text};
-        var btn  = document.getElementById('mcb_{btn_id}');
-
-        function onSuccess() {{
-            btn.textContent = '✅ Copied!';
-            btn.style.cssText = 'background:#064E3B;color:#10B981;border:1px solid #059669;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;font-family:Inter,sans-serif;';
-            setTimeout(function() {{
-                btn.textContent = '{label}';
-                btn.style.cssText = 'background:#13131F;color:#94A3B8;border:1px solid #2D2D44;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:500;cursor:pointer;font-family:Inter,sans-serif;';
-            }}, 2200);
-        }}
-
-        function fallback() {{
-            var ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
-            document.body.appendChild(ta);
-            ta.focus();
-            ta.select();
-            try {{ document.execCommand('copy'); }} catch(e) {{}}
-            document.body.removeChild(ta);
-            onSuccess();
-        }}
-
-        if (navigator && navigator.clipboard && navigator.clipboard.writeText) {{
-            navigator.clipboard.writeText(text)
-                .then(onSuccess)
-                .catch(fallback);
-        }} else {{
-            fallback();
-        }}
-    }})()">
-    {label}
-</button>
-</body>
-</html>"""
-
-    components.html(btn_html, height=46, scrolling=False)
+""")
 
 
 # ════════════════════════════════════════════════════════
@@ -709,13 +604,9 @@ if generate_clicked:
 
     start_time = time.time()
 
-    # ── Progress container ──
-    progress_container = st.container()
-
-    with progress_container:
-        progress_label = st.empty()
-        progress_bar = st.progress(0)
-        stats_bar = st.empty()
+    progress_label = st.empty()
+    progress_bar   = st.progress(0)
+    stats_bar      = st.empty()
 
     papers, hn_stories, news_items = [], [], []
 
@@ -786,7 +677,11 @@ if generate_clicked:
         )
         st.stop()
 
-    # ── Stage 5: Newsletter Agent ──
+    # Deterministically attach source URLs by matching titles back to original sources.
+    # This is reliable; asking the LLM to copy URLs is not.
+    digest_items = enrich_digest_urls(digest_items, papers, hn_stories, news_items)
+
+    # Stage 5: Newsletter Agent
     progress_label.markdown(
         "<div style='color:#94A3B8; font-size:14px; font-family:Inter,sans-serif;'>"
         "✉️ Agent 2: Writing your personalized newsletter...</div>",
@@ -901,9 +796,10 @@ if st.session_state.last_results:
     # ─── TAB 2: NEWSLETTER ───
     with tab_newsletter:
         st.markdown(
-            "<div style='color:#94A3B8; font-size:14px; margin-bottom:20px; font-family:Inter,sans-serif;'>"
-            "Ready-to-send email draft · Sources appended automatically · "
-            "Copy or download below"
+            "<div style='color:#94A3B8;font-size:14px;margin-bottom:20px;"
+            "font-family:Inter,sans-serif;'>"
+            "Ready-to-send email draft &middot; Sources appended automatically &middot; "
+            "Download below"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -931,16 +827,12 @@ if st.session_state.last_results:
                 else:
                     sources_lines.append(f"{idx}. {src_title}")
 
-            if sources_lines:
-                sources_block = (
-                    "\n\n" + "─" * 44 + "\n"
-                    "📚 Sources & Further Reading:\n\n"
-                    + "\n\n".join(sources_lines)
-                )
-            else:
-                sources_block = ""
+            sources_block = (
+                "\n\n" + "\u2500" * 44 + "\n"
+                + "\U0001f4da Sources & Further Reading:\n\n"
+                + "\n\n".join(sources_lines)
+            ) if sources_lines else ""
 
-            # Full newsletter = body + sources list
             full_newsletter_text = body_text + sources_block
 
             # ── Subject line display ──
@@ -960,7 +852,7 @@ if st.session_state.last_results:
             st.markdown(
                 "<div style='color:#64748B; font-size:12px; margin-bottom:8px; "
                 "font-family:Inter,sans-serif;'>"
-                "Email body with sources — select all and copy, or use the buttons below:"
+                "Email body with sources &mdash; select all text and copy, or download below:"
                 "</div>",
                 unsafe_allow_html=True,
             )
@@ -972,27 +864,13 @@ if st.session_state.last_results:
                 key="newsletter_text_area",
             )
 
-            # ── Action buttons row ──
-            # Download button (Streamlit native) + Copy button (components.html)
-            # Use 3 columns: [download] [copy] [spacer]
-            btn_col_dl, btn_col_cp, btn_col_space = st.columns([1, 1, 3])
+            st.download_button(
+                "⬇️ Download Newsletter as .txt",
+                data=full_newsletter_text,
+                file_name=f"newsletter_{datetime.now().strftime('%Y_%m_%d')}.txt",
+                mime="text/plain",
+            )
 
-            with btn_col_dl:
-                st.download_button(
-                    "⬇️ Download as .txt",
-                    data=full_newsletter_text,
-                    file_name=f"newsletter_{datetime.now().strftime('%Y_%m_%d')}.txt",
-                    mime="text/plain",
-                )
-
-            with btn_col_cp:
-                make_copy_button(
-                    text_to_copy=full_newsletter_text,
-                    label="📋 Copy Newsletter",
-                    btn_id="newsletter_copy",
-                )
-
-            # ── Sources preview ──
             if sources_lines:
                 st.markdown(
                     "<div style='color:#334155; font-size:12px; margin-top:6px; "
@@ -1009,9 +887,11 @@ if st.session_state.last_results:
     # ─── TAB 3: LINKEDIN ───
     with tab_linkedin:
         st.markdown(
-            "<div style='color:#94A3B8; font-size:14px; margin-bottom:20px; font-family:Inter,sans-serif;'>"
-            "Two post options · Full text shown · Click "
-            "<strong style='color:#E2E8F0;'>📋 Copy post</strong> at the bottom of either card"
+            "<div style='color:#94A3B8;font-size:14px;margin-bottom:20px;"
+            "font-family:Inter,sans-serif;'>"
+            "Two post options &middot; Click "
+            "<strong style='color:#E2E8F0;'>&#x2B07;&#xFE0F; Download</strong> "
+            "below each card to save as a .txt file"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -1028,6 +908,14 @@ if st.session_state.last_results:
                     label="⚡ POST A — FOR AI PRACTITIONERS",
                     sublabel="Slightly technical · Thought leadership tone",
                 )
+                st.download_button(
+                    label="⬇️ Download Post A",
+                    data=r["linkedin_a"],
+                    file_name=f"linkedin_post_a_{datetime.now().strftime('%Y_%m_%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key="dl_post_a",
+                )
             else:
                 st.warning("Post A not available.")
 
@@ -1041,69 +929,66 @@ if st.session_state.last_results:
                     label="💼 POST B — FOR BUSINESS LEADERS",
                     sublabel="Zero jargon · Executive / MBA audience",
                 )
+                st.download_button(
+                    label="⬇️ Download Post B",
+                    data=r["linkedin_b"],
+                    file_name=f"linkedin_post_b_{datetime.now().strftime('%Y_%m_%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key="dl_post_b",
+                )
             else:
                 st.warning("Post B not available.")
 
-        st.markdown(
-            "<div style='color:#334155; font-size:12px; margin-top:4px; font-family:Inter,sans-serif;'>"
-            "💡 The copy button at the bottom of each card turns green for 2 seconds to confirm. "
-            "Works on Streamlit Cloud and locally."
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
-    # ─── TAB 4: SOURCES ───
+    # ── TAB 4: SOURCES ──
     with tab_sources:
         st.markdown(
-            f"<div style='color:#94A3B8; font-size:14px; margin-bottom:20px; font-family:Inter,sans-serif;'>"
-            f"Everything this brief was built from · {stats['papers']} papers + "
-            f"{stats['hn']} HN stories + {stats['news']} news articles"
+            f"<div style='color:#94A3B8;font-size:14px;margin-bottom:20px;"
+            f"font-family:Inter,sans-serif;'>"
+            f"Everything this brief was built from &middot; "
+            f"{stats['papers']} papers + {stats['hn']} HN stories + {stats['news']} news articles"
             f"</div>",
             unsafe_allow_html=True,
         )
 
         if r["digest"]:
-            st.markdown(
-                "<div style='color:#7C3AED; font-size:12px; font-weight:700; "
-                "letter-spacing:0.8px; font-family:Inter,sans-serif; margin-bottom:12px;'>"
-                "SOURCES USED IN THIS DIGEST</div>",
-                unsafe_allow_html=True,
-            )
+            rows_html = ""
             for item in r["digest"]:
-                source_icon = {"arXiv": "📄", "Hacker News": "🟠", "News": "📰"}.get(
-                    item.get("source_type", "News"), "🌐"
-                )
-                src_url = item.get("source_url", "").strip()
-                src_title_raw = item.get("source_title", "")
-                src_title_safe = html_lib.escape(src_title_raw)
+                src_type  = item.get("source_type", "Web")
+                src_icon  = {"arXiv": "📄", "Hacker News": "🟠", "News": "📰"}.get(src_type, "🌐")
+                src_url   = item.get("source_url", "").strip()
+                src_title = html_lib.escape(item.get("source_title", ""))
 
-                # Wrap title in a link if we have a valid URL
                 if src_url and src_url.startswith("http"):
-                    title_html = (
-                        f"<a href='{src_url}' target='_blank' rel='noopener noreferrer' "
-                        f"style='color:#94A3B8; font-size:13px; font-family:Inter,sans-serif; "
-                        f"text-decoration:none; border-bottom:1px solid #2D2D44; "
-                        f"transition:color 0.15s;'>"
-                        f"{src_title_safe}"
-                        f"</a>"
-                        f"<span style='color:#6366F1; font-size:11px; margin-left:6px; "
-                        f"font-family:Inter,sans-serif;'>↗</span>"
+                    title_part = (
+                        f'<a href="{src_url}" target="_blank" rel="noopener noreferrer" '
+                        f'style="color:#94A3B8;font-size:13px;font-family:Inter,sans-serif;'
+                        f'text-decoration:none;border-bottom:1px solid #2D2D44;">'
+                        f'{src_title}</a>'
+                        f'<span style="color:#6366F1;font-size:11px;margin-left:6px;">&#x2197;</span>'
                     )
                 else:
-                    title_html = (
-                        f"<span style='color:#94A3B8; font-size:13px; "
-                        f"font-family:Inter,sans-serif;'>{src_title_safe}</span>"
+                    title_part = (
+                        f'<span style="color:#94A3B8;font-size:13px;'
+                        f'font-family:Inter,sans-serif;">{src_title}</span>'
                     )
 
-                st.markdown(
-                    f"<div style='padding:10px 0; border-bottom:1px solid #1A1A2E; "
-                    f"display:flex; align-items:baseline; gap:8px;'>"
-                    f"<span style='color:#475569; font-size:12px; font-family:Inter,sans-serif; "
-                    f"white-space:nowrap;'>{source_icon} {item.get('source_type','Web')} &nbsp;·&nbsp;</span>"
-                    f"{title_html}"
-                    f"</div>",
-                    unsafe_allow_html=True,
+                rows_html += (
+                    f'<div style="padding:10px 0;border-bottom:1px solid #1A1A2E;'
+                    f'display:flex;align-items:center;gap:8px;">'
+                    f'<span style="color:#475569;font-size:12px;font-family:Inter,sans-serif;'
+                    f'white-space:nowrap;">{src_icon} {src_type} &nbsp;&middot;&nbsp;</span>'
+                    f'{title_part}'
+                    f'</div>'
                 )
+
+            st.html(
+                f'<div style="font-family:Inter,sans-serif;">'
+                f'<div style="color:#7C3AED;font-size:12px;font-weight:700;'
+                f'letter-spacing:0.8px;margin-bottom:12px;">SOURCES USED IN THIS DIGEST</div>'
+                f'{rows_html}'
+                f'</div>'
+            )
 
 
 # ════════════════════════════════════════════════════════
